@@ -1,10 +1,33 @@
-from enum import Enum, unique
-from math import pi
-from typing import List,Tuple
+
+from tokenize import Triple
+from AD9910_Enum import *
+from math import pi, modf
+from typing import List, Tuple
 from abc import abstractclassmethod
+
+
+def cal_n_bits_max(n: int) -> int:
+    return (1 << n)-1
+
+
 K = 1000
 M = 1000*K
 G = 1000*M
+m = 0.001
+u = 0.001*m
+nano = 0.001*u
+
+TWO_PI = 2*pi
+
+MAX_32_BIT = cal_n_bits_max(32)
+MAX_16_BIT = cal_n_bits_max(16)
+MAX_14_BIT = cal_n_bits_max(14)
+FULL_FTW = MAX_32_BIT
+FULL_POW = MAX_16_BIT
+FULL_ASF = MAX_14_BIT
+MAX_FTW = FULL_FTW >> 1
+
+DT_4_1G = 0.000000004
 
 
 def check_list(input_list: list, element_type=int) -> bool:
@@ -28,7 +51,7 @@ def get_int_low_32(data: int = 0) -> int:
     return 0
 
 
-def combine_bindary(rawdata: int, add_data: int, index: int, size: int = 1) -> int:
+def combine_binary(rawdata: int, add_data: int, index: int, size: int = 1) -> int:
     if isinstance(add_data, bool):
         add_data = int(add_data)
     elif isinstance(add_data, Enum):
@@ -38,83 +61,131 @@ def combine_bindary(rawdata: int, add_data: int, index: int, size: int = 1) -> i
     return rawdata | data
 
 
-@unique
-class INSTR(Enum):
-    CFR1 = 0x00
-    CFR2 = 0x01
-    CFR3 = 0x02
-    AuxDAC = 0x03
-    IOUpdate = 0x04
-    FTW = 0x07
-    POW = 0x08
-    ASF = 0x09
-    MultiSync = 0x0A
-    DigitalRampLimit = 0x0B
-    DigitalRampStepSize = 0x0C
-    DigitalRampRate = 0x0D
-    Profile0 = 0x0E
-    Profile1 = 0x0F
-    Profile2 = 0x10
-    Profile3 = 0x11
-    Profile4 = 0x12
-    Profile5 = 0x13
-    Profile6 = 0x14
-    Profile7 = 0x15
-    RAM = 0x16
+class TRANS:
 
-    @property
-    def read(self) -> int:
-        return 0x80 | self.value
+    @classmethod
+    def __force_into_range(cls, value: float, lower: float, upper: float) -> float:
+        if value < lower:
+            return lower
+        elif value > upper:
+            return upper
+        return value
 
-    @property
-    def write(self) -> int:
-        return self.value
+    @classmethod
+    def SCALE_TO_WORD(cls, value: float, full_range: float, FULL_WORD: int, MAX_WORD: int = MAX_32_BIT, MIN_WORD: int = 0) -> int:
+        tmp = int(value/full_range*FULL_WORD)
+        return cls.__force_into_range(value=tmp, lower=MIN_WORD, upper=MAX_WORD)
 
+    @classmethod
+    def SCALE_FROM_WORD(cls, WORD: float, full_range: float, FULL_WORD: int, MAX_WORD: int = MAX_32_BIT, MIN_WORD: int = 0) -> float:
+        WORD = cls.__force_into_range(value=WORD, lower=MIN_WORD, upper=MAX_WORD)
+        return WORD/FULL_WORD*full_range
 
-@unique
-class RPD(Enum):
-    # RAM_Playback_Destination
-    Frequency = 0b00
-    Phase = 0b01
-    Amplitude = 0b10
-    Polar = 0b11
+    @classmethod
+    def MODIFY_BY_WORD(cls, value: float, full_range: float, FULL_WORD: int, MAX_WORD: int = MAX_32_BIT, MIN_WORD: int = 0) -> float:
+        WORD = cls.SCALE_TO_WORD(value=value, full_range=full_range, FULL_WORD=FULL_WORD, MAX_WORD=MAX_WORD, MIN_WORD=MIN_WORD)
+        return cls.SCALE_FROM_WORD(WORD=WORD, full_range=full_range, FULL_WORD=FULL_WORD, MAX_WORD=MAX_WORD, MIN_WORD=MIN_WORD)
 
+    @classmethod
+    def freq_2_FTW(cls, freq: float, SYSCLK: int = 1*G) -> int:
+        WORD = cls.SCALE_TO_WORD(value=freq, full_range=SYSCLK, FULL_WORD=FULL_FTW, MAX_WORD=MAX_FTW, MIN_WORD=1)
+        if WORD < 1:
+            return 1
+        return WORD
 
-@unique
-class RIPCM(Enum):
-    # RAM Internal Profile Control Modes
-    # 0b0000    Internal    profile control disabled.
-    # 0b0001    Burst       Execute Profile 0, then Profile 1, then halt.
-    # 0b0010    Burst       Execute Profile 0 to Profile 2, then halt.
-    # 0b0011    Burst       Execute Profile 0 to Profile 3, then halt.
-    # 0b0100    Burst       Execute Profile 0 to Profile 4, then halt.
-    # 0b0101    Burst       Execute Profile 0 to Profile 5, then halt.
-    # 0b0110    Burst       Execute Profile 0 to Profile 6, then halt.
-    # 0b0111    Burst       Execute Profile 0 to Profile 7, then halt.
-    # 0b1000    Continuous  Execute Profile 0 to Profile 1, continuously.
-    # 0b1001    Continuous  Execute Profile 0 to Profile 2, continuously.
-    # 0b1010    Continuous  Execute Profile 0 to Profile 3, continuously.
-    # 0b1011    Continuous  Execute Profile 0 to Profile 4, continuously.
-    # 0b1100    Continuous  Execute Profile 0 to Profile 5, continuously.
-    # 0b1101    Continuous  Execute Profile 0 to Profile 6, continuously.
-    # 0b1110    Continuous  Execute Profile 0 to Profile 7, continuously.
-    # 0b1111    Invalid.
-    disable = 0b0000
-    Burst_0_to_1_halt = 0b0001
-    Burst_0_to_2_halt = 0b0010
-    Burst_0_to_3_halt = 0b0011
-    Burst_0_to_4_halt = 0b0100
-    Burst_0_to_5_halt = 0b0101
-    Burst_0_to_6_halt = 0b0110
-    Burst_0_to_7_halt = 0b0111
-    Conti_0_to_1_cont = 0b1000
-    Conti_0_to_2_cont = 0b1001
-    Conti_0_to_3_cont = 0b1010
-    Conti_0_to_4_cont = 0b1011
-    Conti_0_to_5_cont = 0b1100
-    Conti_0_to_6_cont = 0b1101
-    Conti_0_to_7_cont = 0b1110
-    Invalid = 0b1111
+    @classmethod
+    def FTW_2_freq(cls, FTW: int, SYSCLK: int = 1*G) -> float:
+        return cls.SCALE_FROM_WORD(WORD=FTW, full_range=SYSCLK, FULL_WORD=FULL_FTW, MAX_WORD=MAX_FTW, MIN_WORD=1)
+
+    @classmethod
+    def freq_modify(cls, freq: float, SYSCLK: int = 1*G) -> float:
+        return cls.MODIFY_BY_WORD(value=freq, full_range=SYSCLK, FULL_WORD=FULL_FTW, MAX_WORD=MAX_FTW, MIN_WORD=1)
+
+    @classmethod
+    def phase_2_POW(cls, phase_pi: float) -> int:
+        phase_pi = TWO_PI*(modf(phase_pi/TWO_PI)[0])
+        return cls.SCALE_TO_WORD(value=phase_pi, full_range=TWO_PI, FULL_WORD=FULL_POW, MAX_WORD=FULL_POW, MIN_WORD=0)
+
+    @classmethod
+    def phase_2_POW_degree(cls, phase_degree: float) -> int:
+        phase_degree = 360*(modf(phase_degree/360)[0])
+        return cls.SCALE_TO_WORD(value=phase_degree, full_range=360, FULL_WORD=FULL_POW, MAX_WORD=FULL_POW, MIN_WORD=0)
+
+    @classmethod
+    def POW_2_phase(cls, POW: int) -> float:
+        return cls.SCALE_FROM_WORD(WORD=POW, full_range=TWO_PI, FULL_WORD=FULL_POW, MAX_WORD=FULL_POW, MIN_WORD=0)
+
+    @classmethod
+    def phase_modify(cls, phase_pi) -> float:
+        return cls.MODIFY_BY_WORD(value=phase_pi, full_range=TWO_PI, FULL_WORD=FULL_POW, MAX_WORD=FULL_POW, MIN_WORD=0)
+
+    @classmethod
+    def amp_2_ASF(cls, amp_100: float) -> int:
+        return cls.SCALE_TO_WORD(value=amp_100, full_range=100, FULL_WORD=FULL_ASF, MAX_WORD=FULL_ASF, MIN_WORD=0)
+
+    @classmethod
+    def ASF_2_amp(cls, ASF: int) -> int:
+        return cls.SCALE_FROM_WORD(WORD=ASF, full_range=100, FULL_WORD=FULL_ASF, MAX_WORD=FULL_ASF, MIN_WORD=0)
+
+    @classmethod
+    def amp_modify(cls, amp_100: float) -> float:
+        return cls.MODIFY_BY_WORD(value=amp_100, full_range=100, FULL_WORD=FULL_ASF, MAX_WORD=FULL_ASF, MIN_WORD=0)
+
+    @classmethod
+    def time_2_clk(cls, time: float, SYSCLK: int = 1*G, MAX_CLK: int = MAX_32_BIT) -> int:
+        tmp = int(time*SYSCLK)
+        return cls.__force_into_range(value=tmp, lower=0, upper=MAX_CLK)
+
+    @classmethod
+    def clk_2_time(cls, clk: int, SYSCLK: int = 1*G, MAX_CLK: int = MAX_32_BIT) -> float:
+        clk = cls.__force_into_range(value=clk, lower=0, upper=MAX_CLK)
+        return clk/SYSCLK
+
+    @classmethod
+    def time_modify(cls, time: float, SYSCLK: int = 1*G, MAX_CLK: int = MAX_32_BIT) -> float:
+        clk = cls.time_2_clk(time=time, SYSCLK=SYSCLK, MAX_CLK=MAX_CLK)
+        return cls.clk_2_time(clk=clk, SYSCLK=SYSCLK, MAX_CLK=MAX_CLK)
+
+    # @classmethod
+    # def dt_2_nclk(cls, dt, n_clk: int = 4, SYSCLK: int = 1*G) -> int:
+    #     # each n clk as one NEW_CLK
+    #     return int(dt*SYSCLK/n_clk)
+
+    # @classmethod
+    # def dt_2_clk(cls, dt: float, SYSCLK: int = 1*G) -> int:
+    #     return cls.dt_2_nclk(dt=dt, n_clk=1, SYSCLK=SYSCLK)
+
+    # @classmethod
+    # def dt_2_4clk(cls, dt: float, SYSCLK: int = 1*G) -> int:
+    #     # each 4 clk as one NEW_CLK
+    #     return cls.dt_2_nclk(dt=dt, n_clk=4, SYSCLK=SYSCLK)
+
+    # @classmethod
+    # def nclk_2_dt(cls, clk: int, n_clk: int = 4, SYSCLK: int = 1*G) -> float:
+    #     return clk/SYSCLK*n_clk
+
+    # @classmethod
+    # def clk_2_dt(cls, clk: int, SYSCLK: int = 1*G) -> float:
+    #     return cls.nclk_2_dt(clk=clk, n_clk=1, SYSCLK=SYSCLK)
+
+    # @classmethod
+    # def four_clk_2_dt(cls, clk: int, SYSCLK: int = 1*G) -> float:
+    #     return cls.nclk_2_dt(clk=clk, n_clk=4, SYSCLK=SYSCLK)
+
+    # @classmethod
+    # def dt_4_clk(cls, SYSCLK: int = 1*G) -> float:
+    #     return cls.clk_2_dt(clk=4, SYSCLK=SYSCLK)
+
+    # @classmethod
+    # def dt_n_modify(cls, dt: float, n_clk: int, max_time_clk=0xffff, SYSCLK: int = 1*G) -> float:
+    #     SYSCLK = int(SYSCLK/n_clk)
+    #     CLK = cls.dt_2_clk(dt=dt, SYSCLK=SYSCLK)
+    #     CLK = cls.__force_max(CLK, max_time_clk)
+    #     return cls.clk_2_dt(clk=CLK, SYSCLK=SYSCLK)
+
+    # @classmethod
+    # def dt_4_modify(cls, dt: float, max_time_clk=0xffff, SYSCLK: int = 1*G) -> float:
+    #     return cls.dt_n_modify(dt=dt, n_clk=4, max_time_clk=max_time_clk, SYSCLK=SYSCLK)
 
 
 class _cmd:
@@ -178,6 +249,42 @@ class _cmd:
     # def send_CMD(self) -> None:
     #     data = self.generate()
     #     self.send_data(data)
+
+
+class _cmd_clk(_cmd):
+    def __init__(self, instr: INSTR, bits: int, SYSCLK: int = 1*G) -> None:
+        super().__init__(instr=instr, bits=bits)
+        self.__SYSCLK: int = 0
+        self.SYSCLK = SYSCLK
+
+    @property
+    def SYSCLK(self) -> int:
+        return self.__SYSCLK
+
+    @SYSCLK.setter
+    def SYSCLK(self, clk: int) -> None:
+        if not isinstance(clk, int) or clk <= 0:
+            clk = 1*G
+        self.__SYSCLK = clk
+
+
+class _cmd_4_clk(_cmd):
+    def __init__(self, instr: INSTR, bits: int, SYSCLK: int = 1*G) -> None:
+        super().__init__(instr=instr, bits=bits)
+        self.__SYSCLK: int = 0
+        self.SYSCLK = SYSCLK
+
+    @property
+    def SYSCLK_MODIFY(self) -> int:
+        return self.__SYSCLK
+
+    @property
+    def SYSCLK(self) -> int:
+        return self.__SYSCLK << 2
+
+    @SYSCLK.setter
+    def SYSCLK(self, SYSCLK: int) -> None:
+        self.__SYSCLK = SYSCLK >> 2
 
 
 class CRF1(_cmd):
@@ -259,54 +366,28 @@ class CRF1(_cmd):
 
     def build_data(self) -> None:
         data: int = 0
-        data = combine_bindary(rawdata=data, add_data=self.LSB_first, index=0, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.SDIO_input_only, index=1, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.external_power_down_control, index=3, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.auxiliary_DAC_power_down, index=4, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.REFCLK_input_power_down, index=5, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.DAC_power_down, index=6, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.digital_power_down, index=7, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.select_auto_OSK, index=8, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.OSK_enable, index=9, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.load_ARR_IO_update, index=10, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.clear_phase_accumulator, index=11, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.clear_digital_ramp_accumulator, index=12, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.autoclear_phase_accumulator, index=13, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.autoclear_digital_ramp_accumulator, index=14, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.load_LRR_IO_update, index=15, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.select_DDS_sine_output, index=16, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.internal_profile_control, index=17, size=4)
-        data = combine_bindary(rawdata=data, add_data=self.inverse_sinc_filter, index=22, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.manual_OSK_externa, index=23, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.RAM_playback_destination, index=29, size=2)
-        data = combine_bindary(rawdata=data, add_data=self.RAM_enable, index=31, size=1)
+        data = combine_binary(rawdata=data, add_data=self.LSB_first, index=0, size=1)
+        data = combine_binary(rawdata=data, add_data=self.SDIO_input_only, index=1, size=1)
+        data = combine_binary(rawdata=data, add_data=self.external_power_down_control, index=3, size=1)
+        data = combine_binary(rawdata=data, add_data=self.auxiliary_DAC_power_down, index=4, size=1)
+        data = combine_binary(rawdata=data, add_data=self.REFCLK_input_power_down, index=5, size=1)
+        data = combine_binary(rawdata=data, add_data=self.DAC_power_down, index=6, size=1)
+        data = combine_binary(rawdata=data, add_data=self.digital_power_down, index=7, size=1)
+        data = combine_binary(rawdata=data, add_data=self.select_auto_OSK, index=8, size=1)
+        data = combine_binary(rawdata=data, add_data=self.OSK_enable, index=9, size=1)
+        data = combine_binary(rawdata=data, add_data=self.load_ARR_IO_update, index=10, size=1)
+        data = combine_binary(rawdata=data, add_data=self.clear_phase_accumulator, index=11, size=1)
+        data = combine_binary(rawdata=data, add_data=self.clear_digital_ramp_accumulator, index=12, size=1)
+        data = combine_binary(rawdata=data, add_data=self.autoclear_phase_accumulator, index=13, size=1)
+        data = combine_binary(rawdata=data, add_data=self.autoclear_digital_ramp_accumulator, index=14, size=1)
+        data = combine_binary(rawdata=data, add_data=self.load_LRR_IO_update, index=15, size=1)
+        data = combine_binary(rawdata=data, add_data=self.select_DDS_sine_output, index=16, size=1)
+        data = combine_binary(rawdata=data, add_data=self.internal_profile_control, index=17, size=4)
+        data = combine_binary(rawdata=data, add_data=self.inverse_sinc_filter, index=22, size=1)
+        data = combine_binary(rawdata=data, add_data=self.manual_OSK_externa, index=23, size=1)
+        data = combine_binary(rawdata=data, add_data=self.RAM_playback_destination, index=29, size=2)
+        data = combine_binary(rawdata=data, add_data=self.RAM_enable, index=31, size=1)
         self.data = data
-
-
-@unique
-class DRD(Enum):
-    # Digital_Ramp_Destination_Bits(CFR2[21:20])    DDS_SignalControl_Parameter   Bits_Assigned_to_DDSParameter
-    #               0b00                                    Frequency                   31:0
-    #               0b01                                    Phase                       31:16
-    #               0b1x                                    Amplitude                   31:18
-    Frequency = 0b00
-    Phase = 0b01
-    Amplitude = 0b10
-
-
-@unique
-class IOURC(Enum):
-    # 00 = divide-by-1 (default).
-    # 01 = divide-by-2.
-    # 10 = divide-by-4.
-    # 11 = divide-by-8.
-    # f_IO_update=f_sysCLK(2^(A+2)B)
-    # A is the value of the 2-bit word comprising the I/O update rate control bits.
-    # B is the value of the 32-bit word stored in the I/O update rate register.
-    one = 0b00
-    two = 0b01
-    four = 0b10
-    eight = 0b11
 
 
 class CRF2(_cmd):
@@ -375,97 +456,24 @@ class CRF2(_cmd):
         data: int = 0
         if self.FM_gain > 0b1111:
             self.FM_gain = 0b1111
-        data = combine_bindary(rawdata=data, add_data=self.FM_gain, index=0, size=4)
-        data = combine_bindary(rawdata=data, add_data=self.parallel_data_port_enable, index=4, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.sync_timing_validation_disable, index=5, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.data_assembler_hold_last_value, index=6, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.matched_latency_enable, index=7, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.TxEnable_invert, index=9, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.PDCLK_invert, index=10, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.PDCLK_enable, index=11, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.IO_update_rate_control, index=14, size=2)
-        data = combine_bindary(rawdata=data, add_data=self.read_effective_FTW, index=16, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.digital_ramp_no_dwell_low, index=17, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.digital_ramp_no_dwell_high, index=18, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.digital_ramp_enable, index=19, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.digital_ramp_destination, index=20, size=2)
-        data = combine_bindary(rawdata=data, add_data=self.SYNC_CLK_enable, index=22, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.internal_IO_update_active, index=23, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.enable_amplitude_scale_from_single_tone_profiles, index=24, size=1)
+        data = combine_binary(rawdata=data, add_data=self.FM_gain, index=0, size=4)
+        data = combine_binary(rawdata=data, add_data=self.parallel_data_port_enable, index=4, size=1)
+        data = combine_binary(rawdata=data, add_data=self.sync_timing_validation_disable, index=5, size=1)
+        data = combine_binary(rawdata=data, add_data=self.data_assembler_hold_last_value, index=6, size=1)
+        data = combine_binary(rawdata=data, add_data=self.matched_latency_enable, index=7, size=1)
+        data = combine_binary(rawdata=data, add_data=self.TxEnable_invert, index=9, size=1)
+        data = combine_binary(rawdata=data, add_data=self.PDCLK_invert, index=10, size=1)
+        data = combine_binary(rawdata=data, add_data=self.PDCLK_enable, index=11, size=1)
+        data = combine_binary(rawdata=data, add_data=self.IO_update_rate_control, index=14, size=2)
+        data = combine_binary(rawdata=data, add_data=self.read_effective_FTW, index=16, size=1)
+        data = combine_binary(rawdata=data, add_data=self.digital_ramp_no_dwell_low, index=17, size=1)
+        data = combine_binary(rawdata=data, add_data=self.digital_ramp_no_dwell_high, index=18, size=1)
+        data = combine_binary(rawdata=data, add_data=self.digital_ramp_enable, index=19, size=1)
+        data = combine_binary(rawdata=data, add_data=self.digital_ramp_destination, index=20, size=2)
+        data = combine_binary(rawdata=data, add_data=self.SYNC_CLK_enable, index=22, size=1)
+        data = combine_binary(rawdata=data, add_data=self.internal_IO_update_active, index=23, size=1)
+        data = combine_binary(rawdata=data, add_data=self.enable_amplitude_scale_from_single_tone_profiles, index=24, size=1)
         self.data = data
-
-
-@unique
-class DRV0(Enum):
-    # DRV0 Bits (CFR3[29:28])     REFCLK_OUT Buffer
-    #     0b00                    Disabled (tristate)
-    #     0b01                    Low output current
-    #     0b10                    Medium output current
-    #     0b11                    High output current
-    disable = 0b00
-    low = 0b01
-    medium = 0b10
-    high = 0b11
-
-
-@unique
-class VCO(Enum):
-    # VCO_SEL_Bits_(CFR3[26:24])          VCO_Range     frequency
-    #     0b000                            VCO0          400-460
-    #     0b001                            VCO1          455-530
-    #     0b010                            VCO2          530-615
-    #     0b011                            VCO3          650-790
-    #     0b100                            VCO4          760-875
-    #     0b101                            VCO5          920-1030
-    #     0b110                         PLL_bypassed
-    #     0b111                         PLL_bypassed
-    # zero = 0b000
-    _400_460_MHZ = 0b000
-    # one = 0b001
-    _455_530_MHZ = 0b001
-    # two = 0b010
-    _530_615_MHZ = 0b010
-    # three = 0b011
-    _650_790_MHZ = 0b011
-    # four = 0b100
-    _760_875_MHZ = 0b100
-    # five = 0b0101
-    _920_1030_MHZ = 0b0101
-    PLL_bypassed = 0b111
-
-
-@unique
-class PLL_CPC(Enum):
-    # PLL Charge Pump Current
-    # ICP_Bits_(CFR3[21:19]) Charge_Pump_Current,I_cp(μA)
-    #         0b000               212
-    #         0b001               237
-    #         0b010               262
-    #         0b011               287
-    #         0b100               312
-    #         0b101               337
-    #         0b110               363
-    #         0b111               387
-    _212_uA = 0b000
-    _237_uA = 0b001
-    _262_uA = 0b010
-    _287_uA = 0b011
-    _312_uA = 0b100
-    _337_uA = 0b101
-    _363_uA = 0b110
-    _387_uA = 0b111
-
-
-@unique
-class Icp(Enum):
-    _212_uA = 0b000
-    _237_uA = 0b001
-    _262_uA = 0b010
-    _287_uA = 0b011
-    _312_uA = 0b100
-    _337_uA = 0b101
-    _363_uA = 0b110
-    _387_uA = 0b111
 
 
 class CRF3(_cmd):
@@ -496,14 +504,14 @@ class CRF3(_cmd):
         data: int = 0
         if self.N > 0b1111111:
             self.N = 0b1111111
-        data = combine_bindary(rawdata=data, add_data=self.N, index=1, size=7)
-        data = combine_bindary(rawdata=data, add_data=self.PLL_enable, index=8, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.PFD_reset, index=10, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.REFCLK_input_divider_ResetB, index=14, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.REFCLK_input_divider_bypass, index=15, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.I_cp, index=19, size=3)
-        data = combine_bindary(rawdata=data, add_data=self.VCO_SEL, index=24, size=3)
-        data = combine_bindary(rawdata=data, add_data=self.DRV0, index=28, size=2)
+        data = combine_binary(rawdata=data, add_data=self.N, index=1, size=7)
+        data = combine_binary(rawdata=data, add_data=self.PLL_enable, index=8, size=1)
+        data = combine_binary(rawdata=data, add_data=self.PFD_reset, index=10, size=1)
+        data = combine_binary(rawdata=data, add_data=self.REFCLK_input_divider_ResetB, index=14, size=1)
+        data = combine_binary(rawdata=data, add_data=self.REFCLK_input_divider_bypass, index=15, size=1)
+        data = combine_binary(rawdata=data, add_data=self.I_cp, index=19, size=3)
+        data = combine_binary(rawdata=data, add_data=self.VCO_SEL, index=24, size=3)
+        data = combine_binary(rawdata=data, add_data=self.DRV0, index=28, size=2)
         self.data = data
 
 
@@ -525,86 +533,114 @@ class AuxDAC(_cmd):
 
     def build_data(self) -> None:
         data: int = 0
-        data = combine_bindary(rawdata=data, add_data=self.FSC, index=0, size=8)
+        data = combine_binary(rawdata=data, add_data=self.FSC, index=0, size=8)
         self.data = data
 
 
 class IO_Update(_cmd):
-    def __init__(self, IO_update_rate: int = 0xffffffff) -> None:
+    def __init__(self, IO_update_rate: int = MAX_32_BIT) -> None:
         super().__init__(instr=INSTR.IOUpdate, bits=32)
         self.IO_update_rate: int = IO_update_rate
 
     def build_data(self) -> None:
         data: int = 0
-        if self.IO_update_rate > 0xfffffff:
-            self.IO_update_rate = 0xfffffff
-        data = combine_bindary(rawdata=data, add_data=self.IO_update_rate, index=0, size=32)
+        if self.IO_update_rate > MAX_32_BIT:
+            self.IO_update_rate = MAX_32_BIT
+        data = combine_binary(rawdata=data, add_data=self.IO_update_rate, index=0, size=32)
         self.data = data
 
 
-class FTW(_cmd):
-    def __init__(self, frequency_tuning_word: int) -> None:
+class FTW(_cmd_clk):
+    def __init__(self, freq: float, SYSCLK: int = 1*G) -> None:
         super().__init__(instr=INSTR.FTW, bits=32)
-        self.frequency_tuning_word: int = frequency_tuning_word
+        self.__freq: float = 0.0
+        self.SYSCLK = SYSCLK
+        self.freq = freq
+
+    @property
+    def frequency(self) -> float:
+        return self.__freq
+
+    @frequency.setter
+    def frequency(self, freq: float) -> float:
+        self.__freq == TRANS.freq_modify(freq=freq, SYSCLK=self.SYSCLK)
+
+    @property
+    def frequency_tuning_word(self) -> int:
+        return TRANS.freq_2_FTW(freq=self.frequency, SYSCLK=self.SYSCLK)
 
     def build_data(self) -> None:
         data: int = 0
-        if self.frequency_tuning_word > 0xfffffff:
-            self.frequency_tuning_word = 0xfffffff
-        data = combine_bindary(rawdata=data, add_data=self.frequency_tuning_word, index=0, size=32)
+        data = combine_binary(rawdata=data, add_data=self.frequency_tuning_word, index=0, size=32)
         self.data = data
 
 
 class POW(_cmd):
-    def __init__(self, phase_offset_word: int) -> None:
+    def __init__(self, phase_pi: float) -> None:
         super().__init__(instr=INSTR.POW, bits=32)
-        self.phase_offset_word: int = phase_offset_word
+        self.__phase: float = 0
+        self.phase = phase_pi
+
+    @property
+    def phase(self) -> float:
+        return self.__phase
+
+    @phase.setter
+    def phase(self, phase_pi: float) -> None:
+        self.__phase = TRANS.phase_modify(phase_pi=phase_pi)
+
+    @property
+    def phase_offset_word(self) -> int:
+        return TRANS.phase_2_POW(self.phase)
 
     def build_data(self) -> None:
         data: int = 0
-        if self.phase_offset_word > 0xffff:
-            self.phase_offset_word = 0xffff
-        data = combine_bindary(rawdata=data, add_data=self.phase_offset_word, index=0, size=16)
+        data = combine_binary(rawdata=data, add_data=self.phase_offset_word, index=0, size=16)
         self.data = data
 
 
-@unique
-class OSK_SS(Enum):
-    # OSK Amplitude Step Size
-    one = 0b00
-    two = 0b01
-    four = 0b10
-    eight = 0b11
-
-
-class ASF(_cmd):
+class ASF(_cmd_4_clk):
     # Amplitude Scale Factor Register
-    # dt=4M/f_sysCLK
+    # dt=4M/SYSCLK
     # where M is the 16-bit number stored in the amplitude ramp rate (ARR) portion of the ASF register.
     # For example, if fSYSCLK =750 MHz and M = 23218 (0x5AB2), then Δt ≈ 123.8293 μs.
-    def __init__(self, dt: float, scale_factor: int = 0x03fff, step_size: OSK_SS = OSK_SS.one, f_SYSCLK: int = 1*G) -> None:
-        super().__init__(instr=INSTR.ASF, bits=32)
-        self.ramp_rate: int = 0
-        self.set_ramp_rate_by_dt(dt=dt, f_SYSCLK=f_SYSCLK)
-        self.f_SYSCLK: int = f_SYSCLK
-        self.scale_factor: int = scale_factor
+    def __init__(self, amp_100: float, dt: float, step_size: OSK_SS = OSK_SS.one, SYSCLK: int = 1*G) -> None:
+        super().__init__(instr=INSTR.ASF, bits=32, SYSCLK=SYSCLK)
+        self.__dt: float = 0.0
+        self.__amp: float = 0.0
+        self.dt = dt
+        self.amp = amp_100
         self.step_size: OSK_SS = step_size
 
-    def cal_dt(self, f_SYSCLK: int = 1*G) -> float:
-        return 4*self.ramp_rate/f_SYSCLK
+    @property
+    def dt(self) -> float:
+        return self.__dt
 
-    def set_ramp_rate_by_dt(self, dt: float, f_SYSCLK: int = 1*G) -> float:
-        M: int = int(dt*f_SYSCLK/4)
-        if M > 0xffff:
-            M = 0xffff
-        self.ramp_rate = M
-        return self.cal_dt(f_SYSCLK=f_SYSCLK)
+    @dt.setter
+    def dt(self, dt: float) -> None:
+        self.__dt = TRANS.time_modify(time=dt, SYSCLK=self.SYSCLK_MODIFY, MAX_CLK=MAX_16_BIT)
+
+    @property
+    def amp(self) -> float:
+        return self.__amp
+
+    @amp.setter
+    def amp(self, amp_100: float) -> None:
+        self.__amp = TRANS.amp_modify(amp_100=amp_100)
+
+    @property
+    def ramp_rate(self) -> int:
+        return TRANS.time_2_clk(time=self.dt, SYSCLK=self.SYSCLK_MODIFY, MAX_CLK=MAX_16_BIT)
+
+    @property
+    def scale_factor(self) -> int:
+        return TRANS.amp_2_ASF(self.amp)
 
     def build_data(self) -> None:
         data: int = 0
-        data = combine_bindary(rawdata=data, add_data=self.step_size, index=0, size=2)
-        data = combine_bindary(rawdata=data, add_data=self.scale_factor, index=2, size=14)
-        data = combine_bindary(rawdata=data, add_data=self.ramp_rate, index=16, size=16)
+        data = combine_binary(rawdata=data, add_data=self.step_size, index=0, size=2)
+        data = combine_binary(rawdata=data, add_data=self.scale_factor, index=2, size=14)
+        data = combine_binary(rawdata=data, add_data=self.ramp_rate, index=16, size=16)
         self.data = data
 
 
@@ -633,53 +669,158 @@ class MultiSync(_cmd):
 
     def build_data(self) -> None:
         data: int = 0
-        data = combine_bindary(rawdata=data, add_data=self.input_sync_receiver_delay, index=3, size=5)
-        data = combine_bindary(rawdata=data, add_data=self.output_sync_generator, index=11, size=5)
-        data = combine_bindary(rawdata=data, add_data=self.sync_state_preset_value, index=18, size=6)
-        data = combine_bindary(rawdata=data, add_data=self.sync_generator_polarity, index=25, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.sync_generator_enable, index=26, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.sync_receiver_enable, index=27, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.sync_validation_delay, index=28, size=4)
+        data = combine_binary(rawdata=data, add_data=self.input_sync_receiver_delay, index=3, size=5)
+        data = combine_binary(rawdata=data, add_data=self.output_sync_generator, index=11, size=5)
+        data = combine_binary(rawdata=data, add_data=self.sync_state_preset_value, index=18, size=6)
+        data = combine_binary(rawdata=data, add_data=self.sync_generator_polarity, index=25, size=1)
+        data = combine_binary(rawdata=data, add_data=self.sync_generator_enable, index=26, size=1)
+        data = combine_binary(rawdata=data, add_data=self.sync_receiver_enable, index=27, size=1)
+        data = combine_binary(rawdata=data, add_data=self.sync_validation_delay, index=28, size=4)
         self.data = data
 
 
-class DigitalRampLimit(_cmd):
-    def __init__(self, upper: int, lower: int) -> None:
+class DigitalRampLimit(_cmd_clk):
+    def __init__(self, freq_upper: float, freq_lower: float, SYSCLK: int = 1*G) -> None:
         super().__init__(instr=INSTR.DigitalRampLimit, bits=64)
-        self.upper: int = upper
-        self.lower: int = lower
+        self.SYSCLK = SYSCLK
+        self.__freq_upper: float = 0
+        self.__freq_lower: float = 0
+        self.freq_upper = freq_upper
+        self.freq_lower = freq_lower
+
+    @property
+    def freq_upper(self) -> float:
+        return self.__freq_upper
+
+    @freq_upper.setter
+    def freq_upper(self, freq: float) -> None:
+        self.__freq_upper = TRANS.freq_modify(freq=freq, SYSCLK=self.SYSCLK)
+
+    @property
+    def freq_lower(self) -> float:
+        return self.__freq_lower
+
+    @freq_lower.setter
+    def freq_lower(self, freq: float) -> None:
+        self.__freq_lower = TRANS.freq_modify(freq=freq, SYSCLK=self.SYSCLK)
+
+    @property
+    def upper(self) -> int:
+        return TRANS.freq_2_FTW(self.freq_upper, self.SYSCLK)
+
+    @property
+    def lower(self) -> int:
+        return TRANS.freq_2_FTW(self.freq_lower, self.SYSCLK)
 
     def build_data(self) -> None:
         data: int = 0
-        data = combine_bindary(rawdata=data, add_data=self.lower, index=0, size=32)
-        data = combine_bindary(rawdata=data, add_data=self.upper, index=32, size=32)
+        data = combine_binary(rawdata=data, add_data=self.lower, index=0, size=32)
+        data = combine_binary(rawdata=data, add_data=self.upper, index=32, size=32)
         self.data = data
 
 
-class DigitalRampStepSize(_cmd):
-    def __init__(self, decrement: int, increment: int) -> None:
+class DigitalRampStepSize(_cmd_clk):
+    # Eight bytes are assigned to this register. This register is only effective if CFR2[19] = 1. See the Digital Ramp Generator (DRG) section for details.
+    def __init__(self, dx_dec: float, dx_inc: float, ramp_dest: DRD = DRD.Frequency, SYSCLK: int = 1*G, out_max: float = 100.0) -> None:
         super().__init__(instr=INSTR.DigitalRampStepSize, bits=64)
-        self.decrement: int = decrement
-        self.increment: int = increment
+        self.SYSCLK = SYSCLK
+        self.out_max: float = out_max
+        self.__dest: DRD = ramp_dest
+        self.__dec: float = 0
+        self.__inc: float = 0
+        self.inc = dx_inc
+        self.dec = dx_dec
+
+    def GET_WORD(self, value: float) -> int:
+        dest = self.dest
+        if dest == DRD.Frequency:
+            return TRANS.freq_2_FTW(freq=value, SYSCLK=self.SYSCLK)
+        elif dest == DRD.Phase:
+            return TRANS.phase_2_POW(phase_pi=value)
+        elif dest == DRD.Amplitude:
+            return TRANS.amp_2_ASF(amp_100=value)
+
+    def SET_VALUE(self, value: float) -> float:
+        dest = self.dest
+        if dest == DRD.Frequency:
+            return TRANS.freq_modify(freq=value, SYSCLK=self.SYSCLK)
+        elif dest == DRD.Phase:
+            return TRANS.phase_modify(phase_pi=value)
+        elif dest == DRD.Amplitude:
+            return TRANS.amp_modify(amp_100=value)
+
+    @property
+    def dest(self) -> DRD:
+        return self.__dest
+
+    @property
+    def dec(self) -> float:
+        return self.__dec
+
+    @dec.setter
+    def dec(self, dx: float) -> None:
+        self.__dec = self.SET_VALUE(dx)
+
+    @property
+    def inc(self) -> float:
+        return self.__inc
+
+    @inc.setter
+    def inc(self, dx: float) -> None:
+        self.__inc = self.SET_VALUE(dx)
+
+    @property
+    def decrement(self) -> int:
+        return self.GET_WORD(self.dec)
+
+    @property
+    def increment(self) -> int:
+        return self.GET_WORD(self.inc)
 
     def build_data(self) -> None:
         data: int = 0
-        data = combine_bindary(rawdata=data, add_data=self.increment, index=0, size=32)
-        data = combine_bindary(rawdata=data, add_data=self.decrement, index=32, size=32)
+        data = combine_binary(rawdata=data, add_data=self.increment, index=0, size=32)
+        data = combine_binary(rawdata=data, add_data=self.decrement, index=32, size=32)
         self.data = data
 
 
-class DigitalRampRate(_cmd):
-    # Four bytes are assigned to this register. This register is only effective if CFR2[19] = 1. See the Digital Ramp Generator (DRG) section for details.
-    def __init__(self, negative_slope_rate: int, positive_slope_rate: int) -> None:
-        super().__init__(instr=INSTR.DigitalRampRate, bits=32)
-        self.negative_slope_rate: int = negative_slope_rate
-        self.positive_slope_rate: int = positive_slope_rate
+class DigitalRampRate(_cmd_4_clk):
+    def __init__(self, dt_negative: float, dt_positive: float, SYSCLK: int = 1*G) -> None:
+        super().__init__(instr=INSTR.DigitalRampRate, bits=32, SYSCLK=SYSCLK)
+        self.__neg: float = 0.0
+        self.__pos: float = 0.0
+        self.SYSCLK = SYSCLK
+        self.negative = dt_negative
+        self.positive = dt_positive
+
+    @property
+    def negative(self) -> float:
+        return self.__neg
+
+    @negative.setter
+    def negative(self, dt: float) -> None:
+        self.__neg = TRANS.time_modify(time=dt, SYSCLK=self.SYSCLK_MODIFY, MAX_CLK=MAX_16_BIT)
+
+    @property
+    def positive(self) -> float:
+        return self.__pos
+
+    @positive.setter
+    def positive(self, dt: float) -> None:
+        self.__pos = TRANS.time_modify(time=dt, SYSCLK=self.SYSCLK_MODIFY, MAX_CLK=MAX_16_BIT)
+
+    @property
+    def negative_slope_rate(self) -> int:
+        return TRANS.time_2_clk(time=self.negative, SYSCLK=self.SYSCLK_MODIFY, MAX_CLK=MAX_16_BIT)
+
+    @property
+    def positive_slope_rate(self) -> int:
+        return TRANS.time_2_clk(time=self.positive, SYSCLK=self.SYSCLK_MODIFY, MAX_CLK=MAX_16_BIT)
 
     def build_data(self) -> None:
         data: int = 0
-        data = combine_bindary(rawdata=data, add_data=self.positive_slope_rate, index=0, size=16)
-        data = combine_bindary(rawdata=data, add_data=self.negative_slope_rate, index=16, size=16)
+        data = combine_binary(rawdata=data, add_data=self.positive_slope_rate, index=0, size=16)
+        data = combine_binary(rawdata=data, add_data=self.negative_slope_rate, index=16, size=16)
         self.data = data
 
 
@@ -694,30 +835,28 @@ class _profile(_cmd):
         super().__init__(instr=instr, bits=64)
 
 
-class Profile_SingleTone(_profile):
-    def __init__(self, freq: float, amp: float, phase: float = 0, N: int = 0, f_SYSCLK: int = 1*G) -> None:
+class Profile_SingleTone(_profile, _cmd_clk):
+    def __init__(self, freq: float, amp: float, phase: float = 0, N: int = 0, SYSCLK: int = 1*G) -> None:
         super().__init__(N)
         self.__freq: float = 0
         self.__amp: float = 0
         self.__phase: float = 0
-        self.__f_SYSCLK: int = 0
-        self.f_SYSCLK: int = f_SYSCLK
-        self.freq = freq
-        self.amp = amp
-        self.phase = phase
+        # self.__SYSCLK: int = 0
+        self.SYSCLK = SYSCLK
+        self.set_value(freq=freq, amp=amp, phase=phase)
+
+    # @property
+    # def SYSCLK(self) -> int:
+    #     return self.__SYSCLK
+
+    # @SYSCLK.setter
+    # def SYSCLK(self, clk: int) -> None:
+    #     if not isinstance(clk, int) or clk <= 0:
+    #         clk = 1*G
+    #     self.__SYSCLK = clk
 
     @property
-    def f_SYSCLK(self) -> int:
-        return self.__f_SYSCLK
-
-    @f_SYSCLK.setter
-    def f_SYSCLK(self, clk: int) -> None:
-        if not isinstance(clk, int) or clk <= 0:
-            clk = 1*G
-        self.__f_SYSCLK = clk
-
-    @property
-    def fpa(self)->Tuple[float,float,float]:
+    def fpa(self) -> Tuple[float, float, float]:
         return self.freq, self.phase, self.amp
 
     @property
@@ -726,12 +865,7 @@ class Profile_SingleTone(_profile):
 
     @freq.setter
     def freq(self, freq_value: float) -> None:
-        if freq_value < 0.23:
-            freq_value = 0.24
-        self.__freq = freq_value
-        # FTW = self.frequency_tuning_word()
-        FTW = self.cal_FTW(freq=freq_value, clk=self.f_SYSCLK)
-        self.__freq = FTW/0x100000000*self.f_SYSCLK
+        self.__freq = TRANS.freq_modify(freq=freq_value, SYSCLK=self.SYSCLK)
 
     @property
     def amp(self) -> float:
@@ -739,74 +873,40 @@ class Profile_SingleTone(_profile):
 
     @amp.setter
     def amp(self, amp_value: float) -> None:
-        if amp_value > 100:
-            amp_value = 100
-        elif amp_value < 0:
-            amp_value = 0
-        self.__amp = amp_value
-        ASF = self.cal_ASF(amp=amp_value)
-        self.__amp = ASF/0x3fff*100
+        self.__amp = TRANS.amp_modify(amp_100=amp_value)
 
     @property
     def phase(self) -> float:
         return self.__phase
 
-    @phase.setter
-    def phase(self, phase_value: float) -> None:
-        if phase_value >= 2*pi or phase_value < 0:
-            phase_value = 0
-        self.__phase = phase_value
-        POW = self.cal_POW(phase=phase_value)
-        self.__phase = POW/0xffff*2*pi
-
     @property
     def amplitude_scale_factor(self) -> int:
-        return self.cal_ASF(self.amp)
+        return TRANS.amp_2_ASF(self.amp)
 
     @property
     def phase_offset_word(self) -> int:
-        return self.cal_POW(self.phase)
+        return TRANS.phase_2_POW(self.phase)
 
     @property
     def frequency_tuning_word(self) -> int:
-        return self.cal_FTW(freq=self.freq, clk=self.f_SYSCLK)
+        return TRANS.freq_2_FTW(freq=self.freq, SYSCLK=self.SYSCLK)
 
-    @classmethod
-    def cal_FTW(cls, freq: float, clk: int = 1*G):
-        tmp = int(0x100000000/clk*freq)
-        if tmp < 1:
-            tmp = 1
-        return tmp
+    @phase.setter
+    def phase(self, phase_value: float) -> None:
+        self.__phase = TRANS.phase_modify(phase_pi=phase_value)
 
-    @classmethod
-    def cal_POW(cls, phase: float):
-        return int(phase/(2*pi)*0xffff)
-
-    @classmethod
-    def cal_ASF(cls, amp: float):
-        return int(amp*0x3fff/100)
+    def set_value(self, freq: float, amp: float, phase: float = 0) -> Tuple[float, float, float]:
+        self.freq = freq
+        self.amp = amp
+        self.phase = phase
+        return self.fpa
 
     def build_data(self) -> None:
         data: int = 0
-        data = combine_bindary(rawdata=data, add_data=self.frequency_tuning_word, index=0, size=32)
-        data = combine_bindary(rawdata=data, add_data=self.phase_offset_word, index=32, size=16)
-        data = combine_bindary(rawdata=data, add_data=self.amplitude_scale_factor, index=48, size=14)
+        data = combine_binary(rawdata=data, add_data=self.frequency_tuning_word, index=0, size=32)
+        data = combine_binary(rawdata=data, add_data=self.phase_offset_word, index=32, size=16)
+        data = combine_binary(rawdata=data, add_data=self.amplitude_scale_factor, index=48, size=14)
         self.data = data
-
-
-@unique
-class RAM_MC(Enum):
-    # RAM_Profile_Mode_Control_Bits         RAM_Operating_Mode
-    #     0b000, 101, 110, 111                 Direct switch
-    #     0b001                                Ramp-up
-    #     0b010                               Bidirectional ramp
-    #     0b011                             Continuous bidirectional ramp
-    #     0b100                                Continuous recirculate
-    DirectSwitch = 0b000
-    RampUp = 0b001
-    BidirectionalRamp = 0b010
-    ContinuousBidirectionalRamp = 0b011
-    ContinuousRecirculate = 0b100
 
 
 class Profile_RAM(_profile):
@@ -827,12 +927,12 @@ class Profile_RAM(_profile):
 
     def build_data(self) -> None:
         data: int = 0
-        data = combine_bindary(rawdata=data, add_data=self.RAM_mode_control, index=0, size=3)
-        data = combine_bindary(rawdata=data, add_data=self.zero_cross, index=3, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.no_dwell_high, index=5, size=1)
-        data = combine_bindary(rawdata=data, add_data=self.waveform_start_address, index=14, size=10)
-        data = combine_bindary(rawdata=data, add_data=self.waveform_end_address, index=30, size=10)
-        data = combine_bindary(rawdata=data, add_data=self.address_step_rate, index=40, size=16)
+        data = combine_binary(rawdata=data, add_data=self.RAM_mode_control, index=0, size=3)
+        data = combine_binary(rawdata=data, add_data=self.zero_cross, index=3, size=1)
+        data = combine_binary(rawdata=data, add_data=self.no_dwell_high, index=5, size=1)
+        data = combine_binary(rawdata=data, add_data=self.waveform_start_address, index=14, size=10)
+        data = combine_binary(rawdata=data, add_data=self.waveform_end_address, index=30, size=10)
+        data = combine_binary(rawdata=data, add_data=self.address_step_rate, index=40, size=16)
         self.data = data
 
 
