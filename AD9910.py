@@ -30,11 +30,16 @@ def init_GIPO_out(gpio: int, state=False) -> None:
 
 class AD9910:
     def __init__(self, PWR: int, RST: int, OSK: int, IO_update: int, PF0: int, PF1: int, PF2: int, dev: int = 0, bus: int = 0, spi_speed: Speed = Speed._3_9_MHz, threewire: int = True) -> None:
-        self.__init_comunication(dev=dev, bus=bus, spi_speed=spi_speed, threewire=threewire)
+        self.__init_communication(dev=dev, bus=bus, spi_speed=spi_speed, threewire=threewire)
         self.__init_gpio(PWR=PWR, RST=RST, PF0=PF0, PF1=PF1, PF2=PF2, OSK=OSK, IO_update=IO_update)
         self.__crf1 = CRF1()
         self.__crf2 = CRF2()
         self.__crf3 = CRF3()
+        self.__SYSCLK = 1*G
+
+    @property
+    def SYSCLK(self) -> int:
+        return self.__SYSCLK
 
     @property
     def crf1(self) -> CRF1:
@@ -48,7 +53,7 @@ class AD9910:
     def crf3(self) -> CRF3:
         return self.__crf3
 
-    def __init_comunication(self, dev: int = 0, bus: int = 0, spi_speed: Speed = Speed._3_9_MHz, threewire: int = True):
+    def __init_communication(self, dev: int = 0, bus: int = 0, spi_speed: Speed = Speed._3_9_MHz, threewire: int = True):
         # self.spi = spi
         self.spi = spidev.SpiDev()
         self.spi.open(dev, bus)
@@ -73,6 +78,21 @@ class AD9910:
         init_GIPO_out(self.RST, True)
         sleep(0.005)
         GPIO.output(self.RST, False)
+        self.__SYSCLK = 1*G
+        self.__single_tone: Profile_SingleTone = Profile_SingleTone(freq=0, phase=0, amp=100,N=0, SYSCLK=self.SYSCLK)
+
+    @property
+    def SYSCLK(self) -> int:
+        return self.__SYSCLK
+
+    @SYSCLK.setter
+    def SYSCLK(self, SLSCLK: int) -> None:
+        self.__SYSCLK = SLSCLK
+        self.single_tone.SYSCLK = SLSCLK
+
+    @property
+    def single_tone(self) -> Profile_SingleTone:
+        return self.__single_tone
 
     def crf_init(self) -> None:
         # self.crf1.RAM_enable = True
@@ -85,6 +105,7 @@ class AD9910:
         self.crf3.PLL_enable = True
         self.crf3.REFCLK_input_divider_ResetB = True
         self.crf3.N = 25
+        self.SYSCLK = self.crf3.N*40*M
         self.send_data(self.crf1.generate())
         self.send_data(self.crf2.generate())
         self.send_data(self.crf3.generate())
@@ -104,14 +125,43 @@ class AD9910:
     def clear(self) -> None:
         GPIO.cleanup()
 
-    def enable_singel_tone(self) -> None:
-        self.crf1.RAM_enable = False
-        self.crf2.digital_ramp_enable = False
+    def enable_RAM_DRG(self, RAM: bool, DRG: bool) -> None:
+        self.crf1.RAM_enable = RAM
+        self.crf2.digital_ramp_enable = DRG
         self.send_data(self.crf1.generate())
         self.send_data(self.crf2.generate())
 
-    def output_sigel_tone(self, freq: float, amp: float, phase: float = 0) -> float:
-        pf0 = Profile_SingleTone(freq=freq, amp=amp, phase=phase)
-        self.send_data(pf0.generate())
-        self.enable_singel_tone()
-        return pf0.fpa
+    def enable_single_tone(self) -> None:
+        self.enable_RAM_DRG(RAM=False, DRG=False)
+
+    def enable_DRG(self, dest: DRD) -> None:
+        self.crf2.digital_ramp_destination = dest
+        self.crf2.digital_ramp_no_dwell_high = True
+        self.crf2.digital_ramp_no_dwell_low = True
+        self.crf1.autoclear_phase_accumulator = True
+        self.enable_RAM_DRG(RAM=False, DRG=True)
+
+    def enable_RAM(self) -> None:
+        self.enable_RAM_DRG(RAM=True, DRG=False)
+
+    def set_amplitute(self, amp_100) -> float:
+        self.single_tone.amp = amp_100
+        self.send_data(self.single_tone.generate())
+        return self.single_tone.amp
+
+    def output_single_tone(self, freq: float, amp: float, phase: float = 0) -> float:
+        self.single_tone.set_value(freq=freq, amp=amp, phase=phase)
+        self.send_data(self.single_tone.generate())
+        self.enable_single_tone()
+        return self.single_tone.fpa
+
+    def output_sweep_freq(self, lower: float, upper: float, dt: float, df: float)->Tuple[float,float,float,float,float]:
+        # return Tuple:freq_lower,freq_upper,dt,df,speed(Hz/s)
+        ramp_limit = DigitalRampLimit(freq_lower=lower, freq_upper=upper, SYSCLK=self.SYSCLK)
+        step_size = DigitalRampStepSize(dx_dec=df, dx_inc=df, ramp_dest=DRD.Frequency, SYSCLK=self.SYSCLK)
+        ramp_rate = DigitalRampRate(dt_negative=dt, dt_positive=dt, SYSCLK=self.SYSCLK)
+        self.send_data(ramp_limit.generate())
+        self.send_data(step_size.generate())
+        self.send_data(ramp_rate.generate())
+        self.enable_DRG(dest=DRD.Frequency)
+        return ramp_limit.freq_lower, ramp_limit.freq_upper, ramp_rate.negative, step_size.dec,step_size.dec/ramp_rate.negative
