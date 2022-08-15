@@ -1,7 +1,7 @@
 
 from tokenize import Triple
 from AD9910_Enum import *
-from math import pi, modf
+from math import ceil, pi, modf
 from typing import List, Tuple
 from abc import abstractclassmethod
 
@@ -102,49 +102,67 @@ class TRANS:
         return cls.MODIFY_BY_WORD(value=freq, full_range=SYSCLK, FULL_WORD=FULL_FTW, MAX_WORD=MAX_FTW, MIN_WORD=1)
 
     @classmethod
-    def phase_2_POW(cls, phase_pi: float) -> int:
+    def phase_2_POW(cls, phase_pi: float, MIN_WORD: int = 0) -> int:
         phase_pi = TWO_PI*(modf(phase_pi/TWO_PI)[0])
-        return cls.SCALE_TO_WORD(value=phase_pi, full_range=TWO_PI, FULL_WORD=FULL_POW, MAX_WORD=FULL_POW, MIN_WORD=0)
+        return cls.SCALE_TO_WORD(value=phase_pi, full_range=TWO_PI, FULL_WORD=FULL_POW, MAX_WORD=FULL_POW, MIN_WORD=MIN_WORD)
 
     @classmethod
-    def phase_2_POW_degree(cls, phase_degree: float) -> int:
+    def phase_2_POW_degree(cls, phase_degree: float, MIN_WORD: int = 0) -> int:
         phase_degree = 360*(modf(phase_degree/360)[0])
-        return cls.SCALE_TO_WORD(value=phase_degree, full_range=360, FULL_WORD=FULL_POW, MAX_WORD=FULL_POW, MIN_WORD=0)
+        return cls.SCALE_TO_WORD(value=phase_degree, full_range=360, FULL_WORD=FULL_POW, MAX_WORD=FULL_POW, MIN_WORD=MIN_WORD)
 
     @classmethod
-    def POW_2_phase(cls, POW: int) -> float:
-        return cls.SCALE_FROM_WORD(WORD=POW, full_range=TWO_PI, FULL_WORD=FULL_POW, MAX_WORD=FULL_POW, MIN_WORD=0)
+    def POW_2_phase(cls, POW: int, MIN_WORD: int = 0) -> float:
+        return cls.SCALE_FROM_WORD(WORD=POW, full_range=TWO_PI, FULL_WORD=FULL_POW, MAX_WORD=FULL_POW, MIN_WORD=MIN_WORD)
 
     @classmethod
-    def phase_modify(cls, phase_pi) -> float:
-        return cls.MODIFY_BY_WORD(value=phase_pi, full_range=TWO_PI, FULL_WORD=FULL_POW, MAX_WORD=FULL_POW, MIN_WORD=0)
+    def phase_modify(cls, phase_pi, MIN_WORD: int = 0) -> float:
+        return cls.MODIFY_BY_WORD(value=phase_pi, full_range=TWO_PI, FULL_WORD=FULL_POW, MAX_WORD=FULL_POW, MIN_WORD=MIN_WORD)
 
     @classmethod
-    def amp_2_ASF(cls, amp_100: float) -> int:
-        return cls.SCALE_TO_WORD(value=amp_100, full_range=100, FULL_WORD=FULL_ASF, MAX_WORD=FULL_ASF, MIN_WORD=0)
+    def amp_2_ASF(cls, amp_100: float, MIN_WORD: int = 0) -> int:
+        return cls.SCALE_TO_WORD(value=amp_100, full_range=100, FULL_WORD=FULL_ASF, MAX_WORD=FULL_ASF, MIN_WORD=MIN_WORD)
 
     @classmethod
-    def ASF_2_amp(cls, ASF: int) -> int:
-        return cls.SCALE_FROM_WORD(WORD=ASF, full_range=100, FULL_WORD=FULL_ASF, MAX_WORD=FULL_ASF, MIN_WORD=0)
+    def ASF_2_amp(cls, ASF: int, MIN_WORD: int = 0) -> int:
+        return cls.SCALE_FROM_WORD(WORD=ASF, full_range=100, FULL_WORD=FULL_ASF, MAX_WORD=FULL_ASF, MIN_WORD=MIN_WORD)
 
     @classmethod
-    def amp_modify(cls, amp_100: float) -> float:
-        return cls.MODIFY_BY_WORD(value=amp_100, full_range=100, FULL_WORD=FULL_ASF, MAX_WORD=FULL_ASF, MIN_WORD=0)
+    def amp_modify(cls, amp_100: float, MIN_WORD: int = 0) -> float:
+        return cls.MODIFY_BY_WORD(value=amp_100, full_range=100, FULL_WORD=FULL_ASF, MAX_WORD=FULL_ASF, MIN_WORD=MIN_WORD)
 
     @classmethod
-    def time_2_clk(cls, time: float, SYSCLK: int = 1*G, MAX_CLK: int = MAX_32_BIT) -> int:
+    def GET_WORD(cls, value: float, dest: DRD, SYSCLK: int = 1*G, amp_phase_min_word: int = 0) -> int:
+        if dest == DRD.Frequency:
+            return TRANS.freq_2_FTW(freq=value, SYSCLK=SYSCLK)
+        elif dest == DRD.Phase:
+            return TRANS.phase_2_POW(phase_pi=value, MIN_WORD=amp_phase_min_word) << 16
+        elif dest == DRD.Amplitude:
+            return TRANS.amp_2_ASF(amp_100=value, MIN_WORD=amp_phase_min_word) << 18
+
+    @classmethod
+    def SET_VALUE(cls, value: float, dest: DRD, SYSCLK: int = 1*G, amp_phase_min_word: int = 0) -> float:
+        if dest == DRD.Frequency:
+            return TRANS.freq_modify(freq=value, SYSCLK=SYSCLK)
+        elif dest == DRD.Phase:
+            return TRANS.phase_modify(phase_pi=value, MIN_WORD=amp_phase_min_word)
+        elif dest == DRD.Amplitude:
+            return TRANS.amp_modify(amp_100=value, MIN_WORD=amp_phase_min_word)
+
+    @classmethod
+    def time_2_clk(cls, time: float, SYSCLK: int = 1*G, MAX_CLK: int = MAX_32_BIT, MIN_CLK: int = 0) -> int:
         tmp = int(time*SYSCLK)
-        return cls.__force_into_range(value=tmp, lower=0, upper=MAX_CLK)
+        return cls.__force_into_range(value=tmp, lower=MIN_CLK, upper=MAX_CLK)
 
     @classmethod
-    def clk_2_time(cls, clk: int, SYSCLK: int = 1*G, MAX_CLK: int = MAX_32_BIT) -> float:
-        clk = cls.__force_into_range(value=clk, lower=0, upper=MAX_CLK)
+    def clk_2_time(cls, clk: int, SYSCLK: int = 1*G, MAX_CLK: int = MAX_32_BIT, MIN_CLK: int = 0) -> float:
+        clk = cls.__force_into_range(value=clk, lower=MIN_CLK, upper=MAX_CLK)
         return clk/SYSCLK
 
     @classmethod
-    def time_modify(cls, time: float, SYSCLK: int = 1*G, MAX_CLK: int = MAX_32_BIT) -> float:
-        clk = cls.time_2_clk(time=time, SYSCLK=SYSCLK, MAX_CLK=MAX_CLK)
-        return cls.clk_2_time(clk=clk, SYSCLK=SYSCLK, MAX_CLK=MAX_CLK)
+    def time_modify(cls, time: float, SYSCLK: int = 1*G, MAX_CLK: int = MAX_32_BIT, MIN_CLK: int = 0) -> float:
+        clk = cls.time_2_clk(time=time, SYSCLK=SYSCLK, MAX_CLK=MAX_CLK, MIN_CLK=MIN_CLK)
+        return cls.clk_2_time(clk=clk, SYSCLK=SYSCLK, MAX_CLK=MAX_CLK, MIN_CLK=MIN_CLK)
 
     # @classmethod
     # def dt_2_nclk(cls, dt, n_clk: int = 4, SYSCLK: int = 1*G) -> int:
@@ -613,12 +631,19 @@ class ASF(_cmd_4_clk):
         self.step_size: OSK_SS = step_size
 
     @property
+    def time(self) -> float:
+        step = 1 << self.step_size.value
+        N = ceil(self.scale_factor/step)
+        time = N*self.dt
+        return N*self.dt
+
+    @property
     def dt(self) -> float:
         return self.__dt
 
     @dt.setter
     def dt(self, dt: float) -> None:
-        self.__dt = TRANS.time_modify(time=dt, SYSCLK=self.SYSCLK_MODIFY, MAX_CLK=MAX_16_BIT)
+        self.__dt = TRANS.time_modify(time=dt, SYSCLK=self.SYSCLK_MODIFY, MAX_CLK=MAX_16_BIT, MIN_CLK=1)
 
     @property
     def amp(self) -> float:
@@ -626,11 +651,11 @@ class ASF(_cmd_4_clk):
 
     @amp.setter
     def amp(self, amp_100: float) -> None:
-        self.__amp = TRANS.amp_modify(amp_100=amp_100)
+        self.__amp = TRANS.amp_modify(amp_100=amp_100, MIN_WORD=1)
 
     @property
     def ramp_rate(self) -> int:
-        return TRANS.time_2_clk(time=self.dt, SYSCLK=self.SYSCLK_MODIFY, MAX_CLK=MAX_16_BIT)
+        return TRANS.time_2_clk(time=self.dt, SYSCLK=self.SYSCLK_MODIFY, MAX_CLK=MAX_16_BIT, MIN_CLK=1)
 
     @property
     def scale_factor(self) -> int:
@@ -680,74 +705,80 @@ class MultiSync(_cmd):
 
 
 class DigitalRampLimit(_cmd_clk):
-    def __init__(self, freq_upper: float, freq_lower: float, SYSCLK: int = 1*G) -> None:
+    def __init__(self, upper: float, lower: float, dest: DRD = DRD.Frequency, SYSCLK: int = 1*G) -> None:
         super().__init__(instr=INSTR.DigitalRampLimit, bits=64)
         self.SYSCLK = SYSCLK
-        self.__freq_upper: float = 0
-        self.__freq_lower: float = 0
-        self.freq_upper = freq_upper
-        self.freq_lower = freq_lower
+        self.__dest: DRD = dest
+        self.__upper: float = 0
+        self.__lower: float = 0
+        self.upper = upper
+        self.lower = lower
 
     @property
-    def freq_upper(self) -> float:
-        return self.__freq_upper
-
-    @freq_upper.setter
-    def freq_upper(self, freq: float) -> None:
-        self.__freq_upper = TRANS.freq_modify(freq=freq, SYSCLK=self.SYSCLK)
+    def dest(self) -> DRD:
+        return self.__dest
 
     @property
-    def freq_lower(self) -> float:
-        return self.__freq_lower
+    def upper(self) -> float:
+        return self.__upper
 
-    @freq_lower.setter
-    def freq_lower(self, freq: float) -> None:
-        self.__freq_lower = TRANS.freq_modify(freq=freq, SYSCLK=self.SYSCLK)
-
-    @property
-    def upper(self) -> int:
-        return TRANS.freq_2_FTW(self.freq_upper, self.SYSCLK)
+    @upper.setter
+    def upper(self, upper: float) -> None:
+        # self.__upper = TRANS.freq_modify(freq=freq, SYSCLK=self.SYSCLK)
+        self.__upper = TRANS.SET_VALUE(value=upper, dest=self.dest, SYSCLK=self.SYSCLK, amp_phase_min_word=1)
 
     @property
-    def lower(self) -> int:
-        return TRANS.freq_2_FTW(self.freq_lower, self.SYSCLK)
+    def lower(self) -> float:
+        return self.__lower
+
+    @lower.setter
+    def lower(self, lower: float) -> None:
+        self.__lower = TRANS.SET_VALUE(value=lower, dest=self.dest, SYSCLK=self.SYSCLK, amp_phase_min_word=0)
+
+    @property
+    def upper_word(self) -> int:
+        return TRANS.GET_WORD(value=self.upper, dest=self.dest, SYSCLK=self.SYSCLK, amp_phase_min_word=1)
+
+    @property
+    def lower_word(self) -> int:
+        return TRANS.GET_WORD(value=self.lower, dest=self.dest, SYSCLK=self.SYSCLK, amp_phase_min_word=0)
 
     def build_data(self) -> None:
         data: int = 0
-        data = combine_binary(rawdata=data, add_data=self.lower, index=0, size=32)
-        data = combine_binary(rawdata=data, add_data=self.upper, index=32, size=32)
+        data = combine_binary(rawdata=data, add_data=self.lower_word, index=0, size=32)
+        data = combine_binary(rawdata=data, add_data=self.upper_word, index=32, size=32)
         self.data = data
 
 
 class DigitalRampStepSize(_cmd_clk):
     # Eight bytes are assigned to this register. This register is only effective if CFR2[19] = 1. See the Digital Ramp Generator (DRG) section for details.
-    def __init__(self, dx_dec: float, dx_inc: float, ramp_dest: DRD = DRD.Frequency, SYSCLK: int = 1*G, out_max: float = 100.0) -> None:
+    def __init__(self, dx_dec: float, dx_inc: float, ramp_dest: DRD = DRD.Frequency, SYSCLK: int = 1*G) -> None:
         super().__init__(instr=INSTR.DigitalRampStepSize, bits=64)
         self.SYSCLK = SYSCLK
-        self.out_max: float = out_max
+        # self.out_max: float = out_max
         self.__dest: DRD = ramp_dest
         self.__dec: float = 0
         self.__inc: float = 0
         self.inc = dx_inc
         self.dec = dx_dec
 
-    def GET_WORD(self, value: float) -> int:
-        dest = self.dest
-        if dest == DRD.Frequency:
-            return TRANS.freq_2_FTW(freq=value, SYSCLK=self.SYSCLK)
-        elif dest == DRD.Phase:
-            return TRANS.phase_2_POW(phase_pi=value)
-        elif dest == DRD.Amplitude:
-            return TRANS.amp_2_ASF(amp_100=value)
+    # def GET_WORD(self, value: float) -> int:
+    #     dest = self.dest
+    #     if dest == DRD.Frequency:
+    #         return TRANS.freq_2_FTW(freq=value, SYSCLK=self.SYSCLK)
+    #     elif dest == DRD.Phase:
+    #         return TRANS.phase_2_POW(phase_pi=value, MIN_WORD=1)
+    #     elif dest == DRD.Amplitude:
+    #         return TRANS.amp_2_ASF(amp_100=value, MIN_WORD=1)
 
-    def SET_VALUE(self, value: float) -> float:
-        dest = self.dest
-        if dest == DRD.Frequency:
-            return TRANS.freq_modify(freq=value, SYSCLK=self.SYSCLK)
-        elif dest == DRD.Phase:
-            return TRANS.phase_modify(phase_pi=value)
-        elif dest == DRD.Amplitude:
-            return TRANS.amp_modify(amp_100=value)
+    # def SET_VALUE(self, value: float) -> float:
+    #     dest = self.dest
+    #     if dest == DRD.Frequency:
+    #         return TRANS.freq_modify(freq=value, SYSCLK=self.SYSCLK)
+    #     elif dest == DRD.Phase:
+    #         return TRANS.phase_modify(phase_pi=value, MIN_WORD=1)
+    #     elif dest == DRD.Amplitude:
+    #         return TRANS.amp_modify(amp_100=value, MIN_WORD=1)
 
     @property
     def dest(self) -> DRD:
@@ -759,7 +790,8 @@ class DigitalRampStepSize(_cmd_clk):
 
     @dec.setter
     def dec(self, dx: float) -> None:
-        self.__dec = self.SET_VALUE(dx)
+        # self.__dec = self.SET_VALUE(dx)
+        self.__dec = TRANS.SET_VALUE(value=dx, dest=self.dest, SYSCLK=self.SYSCLK, amp_phase_min_word=1)
 
     @property
     def inc(self) -> float:
@@ -767,15 +799,18 @@ class DigitalRampStepSize(_cmd_clk):
 
     @inc.setter
     def inc(self, dx: float) -> None:
-        self.__inc = self.SET_VALUE(dx)
+        # self.__inc = self.SET_VALUE(dx)
+        self.__inc = TRANS.SET_VALUE(value=dx, dest=self.dest, SYSCLK=self.SYSCLK, amp_phase_min_word=1)
 
     @property
     def decrement(self) -> int:
-        return self.GET_WORD(self.dec)
+        # return self.GET_WORD(self.dec)
+        return TRANS.GET_WORD(value=self.dec, dest=self.dest, SYSCLK=self.SYSCLK, amp_phase_min_word=1)
 
     @property
     def increment(self) -> int:
-        return self.GET_WORD(self.inc)
+        # return self.GET_WORD(self.inc)
+        return TRANS.GET_WORD(value=self.inc, dest=self.dest, SYSCLK=self.SYSCLK, amp_phase_min_word=1)
 
     def build_data(self) -> None:
         data: int = 0
